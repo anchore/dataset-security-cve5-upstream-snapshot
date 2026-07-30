@@ -1,0 +1,4 @@
+# CVE V5 Upstream Dataset
+Serves as the base repo containing the upstream records from https://github.com/CVEProject/cvelistV5.  https://github.com/anchore/experimental-dataset-cve-enrichment is a fork of this dataset which provides enhancements over this base dataset.  We don't use https://github.com/CVEProject/cvelistV5 as the base directly because the size of commits in that repo makes it difficult to initialise on GitHub, and the commits there are not of particular use.  
+
+The licensing of this repo follows the license that MITRE provides since it will be a direct clone of that dataset: https://www.cve.org/Legal/TermsOfUse
