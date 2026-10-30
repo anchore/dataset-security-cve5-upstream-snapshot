@@ -1,0 +1,22 @@
+name: "Validate"
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  schema:
+    name: "Check changed records against their CVE schema version"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: pipx run .github/scripts/validate.py "$BASE"
