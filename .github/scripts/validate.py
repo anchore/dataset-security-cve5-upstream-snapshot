@@ -12,6 +12,9 @@ import urllib.request
 
 import jsonschema
 
+# records here are full CVE records, so the schema is used as published
+FRAGMENTS = False
+
 REPO = "https://raw.githubusercontent.com/CVEProject/cve-schema"
 SCHEMA_URLS = {
     "5.0": f"{REPO}/ce5f5c865f14dc40a6548d36b74751abca1c588a/schema/archive/v5.0/docs/CVE_JSON_5.0_bundled.json",
@@ -20,9 +23,25 @@ SCHEMA_URLS = {
 }
 
 
+def relax(node) -> None:
+    # fragments have no providerMetadata, wherever a schema version requires it
+    if isinstance(node, dict):
+        if "providerMetadata" in node.get("required", []):
+            node["required"] = [key for key in node["required"] if key != "providerMetadata"]
+        for value in node.values():
+            relax(value)
+    elif isinstance(node, list):
+        for value in node:
+            relax(value)
+
+
 def load_validator(url: str) -> jsonschema.protocols.Validator:
     with urllib.request.urlopen(url) as response:
         schema = json.load(response)
+    if FRAGMENTS:
+        relax(schema)
+        # and their tags can be empty
+        schema.get("definitions", {}).get("cnaTags", {}).pop("minItems", None)
     cls = jsonschema.validators.validator_for(schema)
     return cls(schema, format_checker=cls.FORMAT_CHECKER)
 
@@ -33,6 +52,9 @@ def problem(path: str, validators: dict) -> str | None:
             record = json.load(f)
     except json.JSONDecodeError as e:
         return f"not valid JSON: {e}"
+    # ponytail: rejected fragments keep "affected": [], which the schema forbids; skipped until Weston decides
+    if FRAGMENTS and "rejectedReasons" in record.get("containers", {}).get("cna", {}):
+        return None
     version = record.get("dataVersion")
     if version not in SCHEMA_URLS:
         return f"no schema known for dataVersion {version}"
