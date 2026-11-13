@@ -3,9 +3,11 @@
 # ///
 """Validate the data/ json files changed since a commit against the CVE schema version each file names.
 
-    pipx run .github/scripts/validate.py <base commit>
+    pipx run .github/scripts/validate.py --base-commit <base commit>
 """
+import argparse
 import json
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -46,13 +48,14 @@ def load_validator(url: str) -> jsonschema.protocols.Validator:
     return cls(schema, format_checker=cls.FORMAT_CHECKER)
 
 
-def problem(path: str, validators: dict) -> str | None:
+def validate_json_file(path: str, validators: dict) -> str | None:
     try:
         with open(path) as f:
             record = json.load(f)
     except json.JSONDecodeError as e:
         return f"not valid JSON: {e}"
-    # ponytail: rejected fragments keep "affected": [], which the schema forbids; skipped until Weston decides
+    # rejected fragments intentionally keep "affected": [], even though the upstream schema forbids it.  This
+    # is because we MAY choose to unreject something on our side and want all of the components to compare to
     if FRAGMENTS and "rejectedReasons" in record.get("containers", {}).get("cna", {}):
         return None
     version = record.get("dataVersion")
@@ -67,13 +70,16 @@ def problem(path: str, validators: dict) -> str | None:
     return error and f"dataVersion {version}: {error.json_path}: {error.message}"
 
 
-def main(base: str) -> int:
-    diff = ["git", "diff", "--name-only", "--diff-filter=AM", base, "HEAD", "--", "data/*.json"]
-    changed = subprocess.check_output(diff, text=True).split()
+def main(base_commit: str | None) -> int:
+    file_paths_command = "git ls-files --directory data"
+    if base_commit:
+        file_paths_command = f"git diff --name-only --diff-filter=AM {base_commit} HEAD -- data/"
+    
+    changed = subprocess.check_output(shlex.split(file_paths_command), text=True).split()
     validators = {}
     failed = 0
     for path in changed:
-        if message := problem(path, validators):
+        if message := validate_json_file(path, validators):
             print(f"{path}: {message}")
             failed += 1
     print(f"{len(changed)} records checked, {failed} failed")
@@ -81,4 +87,10 @@ def main(base: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]))
+    parser = argparse.ArgumentParser(
+        prog='Schema Validator',
+        description='Validates records in the repository against the relevant CVE Schema',
+    )    
+    parser.add_argument("--base-commit", required=False)
+    args = parser.parse_args()
+    sys.exit(main(args.base_commit))
