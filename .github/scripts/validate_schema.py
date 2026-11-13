@@ -1,5 +1,5 @@
 # /// script
-# dependencies = ["jsonschema==4.26.0"]
+# dependencies = ["jsonschema-rs==0.61.2"]
 # ///
 """Validate the data/ json files changed since a commit against the CVE schema version each file names.
 
@@ -7,12 +7,17 @@
 """
 import argparse
 import json
+import logging
 import shlex
 import subprocess
 import sys
 import urllib.request
 
-import jsonschema
+from typing import Any
+
+import jsonschema_rs
+
+logger = logging.getLogger("schema-validator")
 
 # records here are full CVE records, so the schema is used as published
 FRAGMENTS = False
@@ -37,18 +42,24 @@ def relax(node) -> None:
             relax(value)
 
 
-def load_validator(url: str) -> jsonschema.protocols.Validator:
+def load_validator(url: str) -> jsonschema_rs.Validator:
+    logger.debug(f"loading: {url}")
     with urllib.request.urlopen(url) as response:
         schema = json.load(response)
+
+    # The uri format type is too strict here as there are urls in the dataset that 
+    # are invalid per the spec but correct ie git://
+    schema.get("definitions", {}).get("uriType", {}).pop("format", None)
+
     if FRAGMENTS:
         relax(schema)
         # and their tags can be empty
         schema.get("definitions", {}).get("cnaTags", {}).pop("minItems", None)
-    cls = jsonschema.validators.validator_for(schema)
-    return cls(schema, format_checker=cls.FORMAT_CHECKER)
+    return jsonschema_rs.validator_for(schema)
+    #return cls(schema, format_checker=cls.FORMAT_CHECKER)
 
 
-def validate_json_file(path: str, validators: dict) -> str | None:
+def validate_json_file(path: str, validators: dict) -> list[Any] | None:
     try:
         with open(path) as f:
             record = json.load(f)
@@ -63,11 +74,9 @@ def validate_json_file(path: str, validators: dict) -> str | None:
         return f"no schema known for dataVersion {version}"
     if version not in validators:
         validators[version] = load_validator(SCHEMA_URLS[version])
-    error = jsonschema.exceptions.best_match(validators[version].iter_errors(record))
-    # a record is "published or rejected", so the top error just says "matched neither"; dig to the real one
-    while error and error.context:
-        error = jsonschema.exceptions.best_match(error.context)
-    return error and f"dataVersion {version}: {error.json_path}: {error.message}"
+
+    result = validators[version].evaluate(record)
+    return result.errors()
 
 
 def main(base_commit: str | None) -> int:
@@ -79,10 +88,12 @@ def main(base_commit: str | None) -> int:
     validators = {}
     failed = 0
     for path in changed:
-        if message := validate_json_file(path, validators):
-            print(f"{path}: {message}")
-            failed += 1
-    print(f"{len(changed)} records checked, {failed} failed")
+        logger.debug(f"validating: {path}")        
+        if errors := validate_json_file(path, validators):
+            for error in errors:
+                logger.error(f"{path}: {json.dumps(error)}")
+                failed += 1
+    logger.info(f"{len(changed)} records checked, {failed} failed")
     return 1 if failed else 0
 
 
@@ -92,5 +103,12 @@ if __name__ == "__main__":
         description='Validates records in the repository against the relevant CVE Schema',
     )    
     parser.add_argument("--base-commit", required=False)
+    parser.add_argument("-v", "--verbose", required=False, action='store_true')
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
     sys.exit(main(args.base_commit))
